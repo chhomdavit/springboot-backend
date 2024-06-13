@@ -1,0 +1,262 @@
+package com.phegondev.usersmanagementsystem.service;
+
+import com.phegondev.usersmanagementsystem.dto.TokenRequestDto;
+import com.phegondev.usersmanagementsystem.dto.UserRequestDto;
+import com.phegondev.usersmanagementsystem.dto.UserResponseDto;
+import com.phegondev.usersmanagementsystem.entity.Role;
+import com.phegondev.usersmanagementsystem.entity.Users;
+import com.phegondev.usersmanagementsystem.repository.UserRepository;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Service;
+
+import java.util.HashMap;
+import java.util.Optional;
+
+@Service
+public class UserService {
+
+    @Autowired
+    private UserRepository usersRepository;
+    @Autowired
+    private JWTUtils jwtUtils;
+    @Autowired
+    private AuthenticationManager authenticationManager;
+    @Autowired
+    private PasswordEncoder passwordEncoder;
+
+    public UserResponseDto register(UserRequestDto userRequestDto) {
+        UserResponseDto userResponseDto = new UserResponseDto();
+        try {
+            // Check if the email is a Gmail address
+            if (!userRequestDto.getEmail().endsWith("@gmail.com")) {
+                userResponseDto.setStatusCode(400);
+                userResponseDto.setMessage("Only Gmail addresses are allowed");
+                return userResponseDto;
+            }
+            // Check if email already exists
+            if (usersRepository.findByEmail(userRequestDto.getEmail()).isPresent()) {
+                userResponseDto.setStatusCode(400);
+                userResponseDto.setMessage("Email already exists");
+                return userResponseDto;
+            }
+            Users users = new Users();
+            users.setEmail(userRequestDto.getEmail());
+            users.setRole(Role.USER); 
+            users.setName(userRequestDto.getName());
+            users.setPassword(passwordEncoder.encode(userRequestDto.getPassword()));
+            Users usersResult = usersRepository.save(users);
+            if (usersResult.getId() > 0) {
+                userResponseDto.setOurUsers(usersResult);
+                userResponseDto.setMessage("User Saved Successfully");
+                userResponseDto.setStatusCode(200);
+            }
+        } catch (Exception e) {
+            userResponseDto.setStatusCode(500);
+            userResponseDto.setError(e.getMessage());
+        }
+        return userResponseDto;
+    }
+
+    public UserResponseDto login(UserRequestDto loginRequest) {
+        UserResponseDto response = new UserResponseDto();
+        try {
+            authenticationManager
+                    .authenticate(new UsernamePasswordAuthenticationToken(
+                            loginRequest.getEmail(),
+                            loginRequest.getPassword()));
+            var user = usersRepository.findByEmail(loginRequest.getEmail()).orElseThrow();
+            var jwt = jwtUtils.generateToken(user);
+            var refreshToken = jwtUtils.generateRefreshToken(new HashMap<>(), user);
+            response.setAccessToken(jwt);
+            response.setRole(user.getRole());
+            response.setName(user.getName());
+            response.setRefreshToken(refreshToken);
+
+        } catch (Exception e) {
+            response.setStatusCode(500);
+            response.setMessage(e.getMessage());
+        }
+        return response;
+    }
+
+    public UserResponseDto refreshToken(TokenRequestDto tokenRequestDto) {
+        UserResponseDto response = new UserResponseDto();
+        try {
+            String ourEmail = jwtUtils.extractUsername(tokenRequestDto.getRefreshToken());
+            Users users = usersRepository.findByEmail(ourEmail).orElseThrow();
+            if (jwtUtils.isTokenValid(tokenRequestDto.getRefreshToken(), users)) {
+                var jwt = jwtUtils.generateToken(users);
+                response.setAccessToken(jwt);
+                response.setRefreshToken(tokenRequestDto.getRefreshToken());
+                response.setRole(users.getRole());
+            }
+            response.setStatusCode(200);
+            return response;
+
+        } catch (Exception e) {
+            response.setStatusCode(500);
+            response.setMessage(e.getMessage());
+            return response;
+        }
+    }
+
+    // public UserResponseDto getAllUsers() {
+    //     UserResponseDto userResponseDto = new UserResponseDto();
+
+    //     try {
+    //         List<Users> result = usersRepository.findAll();
+    //         if (!result.isEmpty()) {
+    //             userResponseDto.setOurUsersList(result);
+    //             userResponseDto.setStatusCode(200);
+    //             userResponseDto.setMessage("Successful");
+    //         } else {
+    //             userResponseDto.setStatusCode(404);
+    //             userResponseDto.setMessage("No users found");
+    //         }
+    //         return userResponseDto;
+    //     } catch (Exception e) {
+    //         userResponseDto.setStatusCode(500);
+    //         userResponseDto.setMessage("Error occurred: " + e.getMessage());
+    //         return userResponseDto;
+    //     }
+    // }
+
+    // public UserResponseDto getAllUsers(Pageable pageable, String keyword) {
+    //     UserResponseDto userResponseDto = new UserResponseDto();
+        
+    //     try {
+    //       Page<Users> result;
+    //       if (keyword != null && !keyword.isEmpty()) {
+    //         result = usersRepository.findByNameContainingIgnoreCase(keyword, pageable);
+    //       } else {
+    //         result = usersRepository.findAll(pageable);
+    //       }
+          
+    //       if (result.hasContent()) {
+    //         userResponseDto.setOurUsersList(result.getContent()); 
+    //         userResponseDto.setPageNumber(result.getNumber());
+    //         userResponseDto.setPageSize(result.getSize());
+    //         userResponseDto.setTotalElements(result.getTotalElements());
+    //         userResponseDto.setTotalPages(result.getTotalPages());
+    //         userResponseDto.setLast(result.isLast());
+    //         userResponseDto.setStatusCode(200);
+    //         userResponseDto.setMessage("Successful");
+    //       } else {
+    //         userResponseDto.setStatusCode(404);
+    //         userResponseDto.setMessage(keyword != null ? "No users found matching '" + keyword + "'" : "No users found");
+    //       }
+    //       return userResponseDto;
+    //     } catch (Exception e) {
+    //       userResponseDto.setStatusCode(500);
+    //       userResponseDto.setMessage("Error occurred: " + e.getMessage());
+    //       return userResponseDto;
+    //     }
+    //   }
+
+    public UserResponseDto getAllUsers(String keyword, int pageNumber, int pageSize) {
+
+        Pageable pageable = PageRequest.of(pageNumber, pageSize);
+        Page<Users> userPages = keyword == null || keyword.trim().isEmpty() ?
+        usersRepository.findAll(pageable) : usersRepository.findByNameContainingIgnoreCase(keyword, pageable);
+
+        UserResponseDto responseDto = new UserResponseDto();
+        responseDto.setOurUsersList(userPages.getContent());
+        responseDto.setPageNumber(pageNumber);
+        responseDto.setPageSize(pageSize);
+        responseDto.setTotalElements(userPages.getTotalElements());
+        responseDto.setTotalPages(userPages.getTotalPages());
+        responseDto.setLast(userPages.isLast());
+
+        return responseDto;
+    }
+
+    public UserResponseDto getUsersById(Integer id) {
+        UserResponseDto reqRes = new UserResponseDto();
+        try {
+            Users usersById = usersRepository.findById(id).orElseThrow(() -> new RuntimeException("User Not found"));
+            reqRes.setOurUsers(usersById);
+            reqRes.setStatusCode(200);
+            reqRes.setMessage("Users with id '" + id + "' found successfully");
+        } catch (Exception e) {
+            reqRes.setStatusCode(500);
+            reqRes.setMessage("Error occurred: " + e.getMessage());
+        }
+        return reqRes;
+    }
+
+    public UserResponseDto deleteUser(Integer userId) {
+        UserResponseDto reqRes = new UserResponseDto();
+        try {
+            Optional<Users> userOptional = usersRepository.findById(userId);
+            if (userOptional.isPresent()) {
+                usersRepository.deleteById(userId);
+                reqRes.setStatusCode(200);
+                reqRes.setMessage("User deleted successfully");
+            } else {
+                reqRes.setStatusCode(404);
+                reqRes.setMessage("User not found for deletion");
+            }
+        } catch (Exception e) {
+            reqRes.setStatusCode(500);
+            reqRes.setMessage("Error occurred while deleting user: " + e.getMessage());
+        }
+        return reqRes;
+    }
+
+    public UserResponseDto updateUser(Integer userId, Users updatedUser) {
+        UserResponseDto reqRes = new UserResponseDto();
+        try {
+            Optional<Users> userOptional = usersRepository.findById(userId);
+            if (userOptional.isPresent()) {
+                Users existingUser = userOptional.get();
+                existingUser.setEmail(updatedUser.getEmail());
+                existingUser.setName(updatedUser.getName());
+                existingUser.setRole(updatedUser.getRole());
+
+                if (updatedUser.getPassword() != null && !updatedUser.getPassword().isEmpty()) {
+                    existingUser.setPassword(passwordEncoder.encode(updatedUser.getPassword()));
+                }
+
+                Users savedUser = usersRepository.save(existingUser);
+                reqRes.setOurUsers(savedUser);
+                reqRes.setStatusCode(200);
+                reqRes.setMessage("User updated successfully");
+            } else {
+                reqRes.setStatusCode(404);
+                reqRes.setMessage("User not found for update");
+            }
+        } catch (Exception e) {
+            reqRes.setStatusCode(500);
+            reqRes.setMessage("Error occurred while updating user: " + e.getMessage());
+        }
+        return reqRes;
+    }
+
+    public UserResponseDto getMyInfo(String email) {
+        UserResponseDto reqRes = new UserResponseDto();
+        try {
+            Optional<Users> userOptional = usersRepository.findByEmail(email);
+            if (userOptional.isPresent()) {
+                reqRes.setOurUsers(userOptional.get());
+                reqRes.setStatusCode(200);
+                reqRes.setMessage("successful");
+            } else {
+                reqRes.setStatusCode(404);
+                reqRes.setMessage("User not found for update");
+            }
+
+        } catch (Exception e) {
+            reqRes.setStatusCode(500);
+            reqRes.setMessage("Error occurred while getting user info: " + e.getMessage());
+        }
+        return reqRes;
+
+    }
+}
